@@ -38,7 +38,10 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("database connected")
-	
+	if cfg.LLMBaseURL == "" || cfg.LLMAPIKey == "" || cfg.LLMModel == "" {
+		slog.Error("LLM_BASE_URL / LLM_API_KEY / LLM_MODEL must be set")
+		os.Exit(1)
+	}
 	r := chi.NewRouter()
 
 	// chi 官方中间件:注意顺序,从外到内依次生效

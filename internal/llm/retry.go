@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"net/url"
 	"time"
 )
 
@@ -40,6 +41,20 @@ func retryable(err error) bool {
 		default: // 4xx:请求本身有问题,重试无意义
 			return false
 		}
+	}
+	// URL 格式/协议错误:配置问题,重试无意义
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		// url.Error 包装了几乎所有客户端错误,需要看内层:
+		// 超时和连接拒绝是瞬态的,可重试;其余(如 scheme 错误)不可
+		if urlErr.Timeout() {
+			return true
+		}
+		var opErr *net.OpError
+		if errors.As(err, &opErr) {
+			return true // 连接层错误(拒绝、重置):可重试
+		}
+		return false // 其余(协议错误、URL 解析错误):不可重试
 	}
 
 	// 网络层错误(连接被重置、DNS 抖动等):可重试
@@ -81,7 +96,7 @@ func WithRetry[T any](ctx context.Context, cfg RetryConfig, op string, fn func()
 
 		slog.Warn("retrying after error",
 			"op", op, "attempt", attempt, "max", cfg.MaxAttempts,
-			"wait", wait.Round(time.Millisecond), "error", err)
+			"wait", wait.Round(time.Millisecond).String(), "error", err)
 
 		select {
 		case <-time.After(wait):

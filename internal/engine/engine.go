@@ -77,11 +77,14 @@ func (e *Engine) run(ctx context.Context, log *slog.Logger, runID string) error 
 		}
 
 		// ② 调 LLM
-		resp, err := e.LLM.Chat(ctx, llm.ChatRequest{
-			Messages:  msgs,
-			Tools:     e.Registry.Specs(),
-			MaxTokens: defaultMaxToken,
-		})
+		resp, err := llm.WithRetry(ctx, llm.DefaultRetry, "llm.chat",
+			func() (*llm.ChatResponse, error) {
+				return e.LLM.Chat(ctx, llm.ChatRequest{
+					Messages:  msgs,
+					Tools:     e.Registry.Specs(),
+					MaxTokens: defaultMaxToken,
+				})
+			})
 		if err != nil {
 			return fmt.Errorf("llm call: %w", err)
 		}
