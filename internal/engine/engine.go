@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/YouthVoyager/relay/internal/store"
 	"github.com/YouthVoyager/relay/internal/store/sqlcgen"
 	"github.com/YouthVoyager/relay/internal/tools"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -187,9 +189,22 @@ func (e *Engine) append(ctx context.Context, runID string, seq *int32, typ strin
 		}
 	}
 	*seq++
-	if _, err := e.Store.Queries.AppendEvent(ctx, sqlcgen.AppendEventParams{
+	// if _, err := e.Store.Queries.AppendEvent(ctx, sqlcgen.AppendEventParams{
+	// 	RunID: runID, Seq: *seq, Type: typ, Payload: data,
+	// }); err != nil {
+	// 	return fmt.Errorf("append event seq=%d: %w", *seq, err)
+	// }
+	// return nil
+	_, err := e.Store.Queries.AppendEvent(ctx, sqlcgen.AppendEventParams{
 		RunID: runID, Seq: *seq, Type: typ, Payload: data,
-	}); err != nil {
+	})
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+			slog.Warn("event already exists, treating as success",
+				"run_id", runID, "seq", *seq, "type", typ)
+			return nil
+		}
 		return fmt.Errorf("append event seq=%d: %w", *seq, err)
 	}
 	return nil

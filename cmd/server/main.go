@@ -59,6 +59,10 @@ func main() {
 		LLM:      llm.NewClient(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel),
 		Registry: reg,
 	}
+	if err := eng.RecoverOrphans(context.Background()); err != nil {
+		slog.Error("recover orphans failed", "error", err)
+		os.Exit(1)
+	}
 
 	runsHandler := &api.RunsHandler{Store: st, Engine: eng}
 	r.Mount("/api/runs", runsHandler.Routes())

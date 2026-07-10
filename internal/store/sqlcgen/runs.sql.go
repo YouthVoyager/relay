@@ -83,6 +83,37 @@ func (q *Queries) ListRuns(ctx context.Context, limit int32) ([]Run, error) {
 	return items, nil
 }
 
+const listRunsByStatus = `-- name: ListRunsByStatus :many
+SELECT id, goal, status, error, created_at, updated_at FROM runs WHERE status = $1 ORDER BY created_at ASC
+`
+
+func (q *Queries) ListRunsByStatus(ctx context.Context, status string) ([]Run, error) {
+	rows, err := q.db.Query(ctx, listRunsByStatus, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Run
+	for rows.Next() {
+		var i Run
+		if err := rows.Scan(
+			&i.ID,
+			&i.Goal,
+			&i.Status,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateRunStatus = `-- name: UpdateRunStatus :exec
 UPDATE runs
 SET status = $2, error = $3, updated_at = now()
