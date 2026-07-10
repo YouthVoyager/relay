@@ -1,0 +1,12 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "migrations"        # 从 goose 迁移文件读取表结构
+    queries: "internal/store/queries"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/store/sqlcgen"
+        sql_package: "pgx/v5"   # 生成 pgx 原生代码,而不是 database/sql
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
