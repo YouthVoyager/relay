@@ -61,6 +61,7 @@ func main() {
 		Store:    st,
 		LLM:      llm.NewClient(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel),
 		Registry: reg,
+		CompactionThreshold: cfg.CompactionThreshold,
 	}
 	if err := eng.RecoverOrphans(context.Background()); err != nil {
 		slog.Error("recover orphans failed", "error", err)

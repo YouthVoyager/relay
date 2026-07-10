@@ -7,7 +7,13 @@ const (
 	EventLLMCalled    = "llm_called"    // 一次 LLM 调用完成(含响应)
 	EventToolExecuted = "tool_executed" // 一次工具执行完成(含结果)
 	EventRunFinished  = "run_finished"  // 终态:succeeded / failed
+	EventCompaction = "compaction" // 上下文压缩:此事件之前的历史被摘要取代
 )
+type CompactionPayload struct {
+	Summary    string `json:"summary"`
+	ThroughSeq int32  `json:"through_seq"` // 摘要覆盖到哪个 seq(含)
+	SavedTokens int   `json:"saved_tokens,omitempty"` // 观测用:这次压缩省了多少
+}
 
 type LLMCalledPayload struct {
 	Content      string          `json:"content,omitempty"`

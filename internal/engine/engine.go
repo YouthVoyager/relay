@@ -29,6 +29,7 @@ type Engine struct {
 	Store    *store.Store
 	LLM      *llm.Client
 	Registry *tools.Registry
+	CompactionThreshold int
 }
 
 // Execute 执行一个 run 直到终态。设计为在独立 goroutine 中调用。
@@ -108,6 +109,13 @@ func (e *Engine) run(ctx context.Context, log *slog.Logger, runID string) error 
 		log.Info("llm step", "step", step, "finish_reason", choice.FinishReason,
 			"tool_calls", len(choice.Message.ToolCalls),
 			"prompt_tokens", resp.Usage.PromptTokens)
+		if resp.Usage.PromptTokens > e.CompactionThreshold{
+			if err := e.compact(ctx, log, runID, &seq, msgs, resp.Usage.PromptTokens); err != nil {
+				return err
+			}
+			// 注意:不需要手动"应用"压缩——下一拍 buildMessages 从事件流
+			// 重建时自然会遇到 compaction 事件并采用新视图。机制统一,零特判。
+		}
 
 		// ④ 分派
 		if choice.FinishReason != "tool_calls" || len(choice.Message.ToolCalls) == 0 {
@@ -156,6 +164,18 @@ func (e *Engine) buildMessages(ctx context.Context, run sqlcgen.Run) ([]llm.Mess
 
 	for _, ev := range events {
 		switch ev.Type {
+		case EventCompaction:
+			var pl CompactionPayload
+			if err := json.Unmarshal(ev.Payload, &pl); err != nil {
+				return nil, fmt.Errorf("bad payload at seq %d: %w", ev.Seq, err)
+			}
+			// 重置对话:system + 原始目标 + 摘要,之前累积的全部丢弃
+			msgs = []llm.Message{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: run.Goal},
+				{Role: "assistant", Content: "我已经执行了一段时间,以下是目前为止的执行摘要:\n\n" + pl.Summary},
+				{Role: "user", Content: "请基于以上进展继续完成任务。"},
+			}
 		case EventLLMCalled:
 			var pl LLMCalledPayload
 			if err := json.Unmarshal(ev.Payload, &pl); err != nil {
