@@ -5,6 +5,8 @@
 package sqlcgen
 
 import (
+	"encoding/json"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -13,7 +15,7 @@ type Event struct {
 	RunID     string             `json:"run_id"`
 	Seq       int32              `json:"seq"`
 	Type      string             `json:"type"`
-	Payload   []byte             `json:"payload"`
+	Payload   json.RawMessage    `json:"payload"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 

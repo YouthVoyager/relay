@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/YouthVoyager/relay/internal/api"
 	"github.com/YouthVoyager/relay/internal/config"
+	"github.com/YouthVoyager/relay/internal/engine"
+	"github.com/YouthVoyager/relay/internal/llm"
 	"github.com/YouthVoyager/relay/internal/store"
+	"github.com/YouthVoyager/relay/internal/tools"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -41,7 +45,22 @@ func main() {
 	r.Use(middleware.RequestID) // 给每个请求生成唯一 ID,注入 context
 	r.Use(api.RequestLogger) //记录每个请求的方法、路径、状态码、字节数、耗时和 request ID
 	r.Use(middleware.Recoverer) // handler 里 panic 时兜底,返回 500 而不是让进程崩掉
-	runsHandler := &api.RunsHandler{Store: st}
+	
+	ws := filepath.Join(".", "workspace")
+	os.MkdirAll(ws, 0o755)
+	absWS, _ := filepath.Abs(ws)
+
+	reg := tools.NewRegistry()
+	reg.Register(&tools.ListDir{Workspace: absWS})
+	reg.Register(&tools.ReadFile{Workspace: absWS})
+
+	eng := &engine.Engine{
+		Store:    st,
+		LLM:      llm.NewClient(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel),
+		Registry: reg,
+	}
+
+	runsHandler := &api.RunsHandler{Store: st, Engine: eng}
 	r.Mount("/api/runs", runsHandler.Routes())
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

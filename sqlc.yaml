@@ -7,6 +7,15 @@ sql:
       go:
         package: "sqlcgen"
         out: "internal/store/sqlcgen"
-        sql_package: "pgx/v5"   # 生成 pgx 原生代码,而不是 database/sql
+        sql_package: "pgx/v5"
         emit_json_tags: true
         emit_pointers_for_null_types: true
+        overrides:
+          - db_type: "pg_catalog.jsonb"
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+          - db_type: "jsonb"
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"

@@ -7,6 +7,7 @@ package sqlcgen
 
 import (
 	"context"
+	"encoding/json"
 )
 
 const appendEvent = `-- name: AppendEvent :one
@@ -16,10 +17,10 @@ RETURNING id, run_id, seq, type, payload, created_at
 `
 
 type AppendEventParams struct {
-	RunID   string `json:"run_id"`
-	Seq     int32  `json:"seq"`
-	Type    string `json:"type"`
-	Payload []byte `json:"payload"`
+	RunID   string          `json:"run_id"`
+	Seq     int32           `json:"seq"`
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) (Event, error) {

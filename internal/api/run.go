@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -12,12 +13,14 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/YouthVoyager/relay/internal/engine"
 	"github.com/YouthVoyager/relay/internal/store"
 	"github.com/YouthVoyager/relay/internal/store/sqlcgen"
 )
 
 type RunsHandler struct {
 	Store *store.Store
+	Engine *engine.Engine
 }
 
 // Routes 返回本模块的子路由,挂载点由 main 决定。
@@ -26,7 +29,21 @@ func (h *RunsHandler) Routes() chi.Router {
 	r.Post("/", h.create)
 	r.Get("/", h.list)
 	r.Get("/{id}", h.get)
+	r.Get("/{id}/events", h.listEvents)
 	return r
+}
+func (h *RunsHandler) listEvents(w http.ResponseWriter, r *http.Request) {
+	events, err := h.Store.Queries.ListEventsByRun(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		slog.Error("list events failed", "error", err,
+			"request_id", middleware.GetReqID(r.Context()))
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if events == nil {
+		events = []sqlcgen.Event{}
+	}
+	writeJSON(w, http.StatusOK, events)
 }
 
 type createRunRequest struct {
@@ -58,6 +75,9 @@ func (h *RunsHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	// 后台执行。用 context.Background():run 的生命周期远长于这次 HTTP 请求,
+	// 绝不能挂在 r.Context() 上——请求一结束它就被取消了。
+	go h.Engine.Execute(context.Background(), run.ID)
 
 	writeJSON(w, http.StatusCreated, run)
 }
