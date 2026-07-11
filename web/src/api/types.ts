@@ -11,6 +11,14 @@ export interface Run {
   updated_at: string
 }
 
+// approval_requested 事件的 payload,镜像后端 engine.ApprovalRequestedPayload
+export interface ApprovalRequest {
+  tool_call_id: string
+  tool_name: string
+  arguments: string
+  reason: string
+}
+
 export interface RunEvent {
   id: number
   run_id: string

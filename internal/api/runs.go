@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,7 +33,54 @@ func (h *RunsHandler) Routes() chi.Router {
 	r.Get("/{id}/events", h.listEvents)
 	r.Post("/{id}/cancel", h.cancel)
 	r.Get("/{id}/events/stream", h.StreamHandler.Stream)
+	r.Post("/{id}/approval", h.decide)
 	return r
+}
+type approvalRequest struct {
+	ToolCallID string `json:"tool_call_id"`
+	Approved   bool   `json:"approved"`
+}
+
+func (h *RunsHandler) decide(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req approvalRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	run, err := h.Store.Queries.GetRun(r.Context(), id)
+	if err != nil || run.Status != "waiting_approval" {
+		writeError(w, http.StatusConflict, "run is not waiting for approval")
+		return
+	}
+
+	seq, err := h.Store.Queries.GetLastSeq(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	payload, _ := json.Marshal(engine.ApprovalDecidedPayload{
+		ToolCallID: req.ToolCallID, Approved: req.Approved,
+	})
+	ev, err := h.Store.Queries.AppendEvent(r.Context(), sqlcgen.AppendEventParams{
+		RunID: id, Seq: seq + 1, Type: engine.EventApprovalDecided, Payload: payload,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	// 推给已连接的 SSE 订阅者,否则前端的审批卡片要等重连才会消失
+	h.StreamHandler.Bus.Publish(ev)
+
+	_ = h.Store.Queries.UpdateRunStatus(r.Context(), sqlcgen.UpdateRunStatusParams{
+		ID: id, Status: "running",
+	})
+	if !h.Runner.Start(id) {
+		writeError(w, http.StatusServiceUnavailable, "server is shutting down")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "resumed"})
 }
 func (h *RunsHandler) listEvents(w http.ResponseWriter, r *http.Request) {
 	events, err := h.Store.Queries.ListEventsByRun(r.Context(), chi.URLParam(r, "id"))

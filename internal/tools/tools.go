@@ -16,6 +16,11 @@ type Tool interface {
 	// 返回给模型看的结果文本。error 表示工具自身故障(区别于"执行了但结果不理想")。
 	Execute(ctx context.Context, args string) (string, error)
 }
+// Dangerous 由需要人工审批的工具实现。
+type Dangerous interface {
+	// ApprovalReason 返回给审批人看的风险说明
+	ApprovalReason(args string) string
+}
 
 // Registry 管理一组工具,提供查找和批量导出声明。
 type Registry struct {

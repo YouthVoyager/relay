@@ -19,6 +19,12 @@ export const api = {
     }),
   cancelRun: (id: string) =>
     request<{ status: string }>(`/api/runs/${id}/cancel`, { method: 'POST' }),
+  decideApproval: (id: string, toolCallId: string, approved: boolean) =>
+    request<{ status: string }>(`/api/runs/${id}/approval`, {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ tool_call_id: toolCallId, approved }),
+    }),
 }
 
 import type { Run } from './types'
