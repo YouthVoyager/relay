@@ -30,6 +30,7 @@ type Engine struct {
 	LLM      *llm.Client
 	Registry *tools.Registry
 	CompactionThreshold int
+	Bus *Bus
 }
 
 // Execute 执行一个 run 直到终态。设计为在独立 goroutine 中调用。
@@ -244,7 +245,7 @@ func (e *Engine) append(ctx context.Context, runID string, seq *int32, typ strin
 	// 	return fmt.Errorf("append event seq=%d: %w", *seq, err)
 	// }
 	// return nil
-	_, err := e.Store.Queries.AppendEvent(ctx, sqlcgen.AppendEventParams{
+	ev, err := e.Store.Queries.AppendEvent(ctx, sqlcgen.AppendEventParams{
 		RunID: runID, Seq: *seq, Type: typ, Payload: data,
 	})
 	if err != nil {
@@ -256,6 +257,9 @@ func (e *Engine) append(ctx context.Context, runID string, seq *int32, typ strin
 		}
 		return fmt.Errorf("append event seq=%d: %w", *seq, err)
 	}
+		if e.Bus != nil {
+			e.Bus.Publish(ev)
+		}
 	return nil
 }
 

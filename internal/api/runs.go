@@ -20,6 +20,7 @@ import (
 type RunsHandler struct {
 	Store *store.Store
 	Runner *engine.Runner
+	StreamHandler *StreamHandler
 }
 
 // Routes 返回本模块的子路由,挂载点由 main 决定。
@@ -30,6 +31,7 @@ func (h *RunsHandler) Routes() chi.Router {
 	r.Get("/{id}", h.get)
 	r.Get("/{id}/events", h.listEvents)
 	r.Post("/{id}/cancel", h.cancel)
+	r.Get("/{id}/events/stream", h.StreamHandler.Stream)
 	return r
 }
 func (h *RunsHandler) listEvents(w http.ResponseWriter, r *http.Request) {

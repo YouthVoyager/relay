@@ -56,12 +56,13 @@ func main() {
 	reg := tools.NewRegistry()
 	reg.Register(&tools.ListDir{Workspace: absWS})
 	reg.Register(&tools.ReadFile{Workspace: absWS})
-
+	bus := engine.NewBus()
 	eng := &engine.Engine{
 		Store:    st,
 		LLM:      llm.NewClient(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel),
 		Registry: reg,
 		CompactionThreshold: cfg.CompactionThreshold,
+		Bus: bus,
 	}
 	runner := engine.NewRunner(eng)
 	orphansIDs,err := eng.ListOrphans(context.Background());
@@ -72,7 +73,11 @@ func main() {
 	for _,id := range orphansIDs{
 		runner.Start(id)
 	}
-	runsHandler := &api.RunsHandler{Store: st, Runner: runner}
+	streamHeader := &api.StreamHandler{
+		Store: st,
+		Bus: bus,
+	}
+	runsHandler := &api.RunsHandler{Store: st, Runner: runner,StreamHandler: streamHeader}
 	r.Mount("/api/runs", runsHandler.Routes())
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

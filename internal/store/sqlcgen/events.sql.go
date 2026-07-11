@@ -55,6 +55,44 @@ func (q *Queries) GetLastSeq(ctx context.Context, runID string) (int32, error) {
 	return last_seq, err
 }
 
+const listEventsAfter = `-- name: ListEventsAfter :many
+SELECT id, run_id, seq, type, payload, created_at FROM events
+WHERE run_id = $1 AND id > $2
+ORDER BY id ASC
+`
+
+type ListEventsAfterParams struct {
+	RunID string `json:"run_id"`
+	ID    int64  `json:"id"`
+}
+
+func (q *Queries) ListEventsAfter(ctx context.Context, arg ListEventsAfterParams) ([]Event, error) {
+	rows, err := q.db.Query(ctx, listEventsAfter, arg.RunID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Event
+	for rows.Next() {
+		var i Event
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.Seq,
+			&i.Type,
+			&i.Payload,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEventsByRun = `-- name: ListEventsByRun :many
 SELECT id, run_id, seq, type, payload, created_at FROM events
 WHERE run_id = $1

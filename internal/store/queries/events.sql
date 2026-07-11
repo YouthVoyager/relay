@@ -12,3 +12,7 @@ ORDER BY seq ASC;
 SELECT COALESCE(MAX(seq), 0)::int AS last_seq
 FROM events
 WHERE run_id = $1;
+-- name: ListEventsAfter :many
+SELECT * FROM events
+WHERE run_id = $1 AND id > $2
+ORDER BY id ASC;
