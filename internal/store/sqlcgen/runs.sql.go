@@ -52,6 +52,17 @@ func (q *Queries) GetRun(ctx context.Context, id string) (Run, error) {
 	return i, err
 }
 
+const getRunStatus = `-- name: GetRunStatus :one
+SELECT status FROM runs WHERE id = $1
+`
+
+func (q *Queries) GetRunStatus(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getRunStatus, id)
+	var status string
+	err := row.Scan(&status)
+	return status, err
+}
+
 const listRuns = `-- name: ListRuns :many
 SELECT id, goal, status, error, created_at, updated_at FROM runs ORDER BY created_at DESC LIMIT $1
 `

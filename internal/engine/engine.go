@@ -36,12 +36,23 @@ type Engine struct {
 func (e *Engine) Execute(ctx context.Context, runID string) {
 	log := slog.With("run_id", runID)
 
-	if err := e.run(ctx, log, runID); err != nil {
+	err := e.run(ctx, log, runID)
+	switch {
+	case err == nil:
+		e.finish(context.Background(), log, runID, "succeeded", "")
+	case errors.Is(err, context.Canceled):
+		// 被打断。是用户取消还是进程挂起?查一下意图标记。
+		if e.isCancelRequested(runID) {
+			log.Info("run cancelled by user")
+			e.finish(context.Background(), log, runID, "cancelled", "")
+		} else {
+			// 挂起:什么都不写,status 留在 running,下次启动被恢复器捞起
+			log.Info("run suspended for shutdown, will resume on next start")
+		}
+	default:
 		log.Error("run failed", "error", err)
-		e.finish(ctx, log, runID, "failed", err.Error())
-		return
+		e.finish(context.Background(), log, runID, "failed", err.Error())
 	}
-	e.finish(ctx, log, runID, "succeeded", "")
 }
 
 func (e *Engine) run(ctx context.Context, log *slog.Logger, runID string) error {
@@ -71,6 +82,11 @@ func (e *Engine) run(ctx context.Context, log *slog.Logger, runID string) error 
 
 	// 主循环
 	for step := 0; step < maxSteps; step++ {
+		var lastToolSig string
+		var repeatCount int
+		if err := ctx.Err(); err != nil {
+			return err // context.Canceled 会被 Execute 的 switch 接住
+		}
 		// ① 从事件流重建对话——不维护内存态,这是可恢复性的根
 		msgs, err := e.buildMessages(ctx, run)
 		if err != nil {
@@ -123,6 +139,16 @@ func (e *Engine) run(ctx context.Context, log *slog.Logger, runID string) error 
 		}
 
 		for _, tc := range choice.Message.ToolCalls {
+			sig := tc.Function.Name + "|" + tc.Function.Arguments
+			if sig == lastToolSig {
+				repeatCount++
+				if repeatCount >= 3 {
+					return fmt.Errorf("loop detected: %q repeated %d times consecutively",
+						tc.Function.Name, repeatCount+1)
+				}
+			} else {
+				lastToolSig, repeatCount = sig, 0
+			}
 			result := e.executeTool(ctx, log, tc)
 			if err := e.append(ctx, runID, &seq, EventToolExecuted, ToolExecutedPayload{
 				ToolCallID: tc.ID, Name: tc.Function.Name, Result: result,
@@ -250,4 +276,9 @@ func (e *Engine) finish(ctx context.Context, log *slog.Logger, runID, status, er
 	}); err != nil {
 		log.Error("finish: update status failed", "error", err)
 	}
+}
+
+func (e *Engine) isCancelRequested(runID string) bool {
+	status, err := e.Store.Queries.GetRunStatus(context.Background(), runID)
+	return err == nil && status == "cancelling"
 }

@@ -63,12 +63,16 @@ func main() {
 		Registry: reg,
 		CompactionThreshold: cfg.CompactionThreshold,
 	}
-	if err := eng.RecoverOrphans(context.Background()); err != nil {
+	runner := engine.NewRunner(eng)
+	orphansIDs,err := eng.ListOrphans(context.Background());
+	if  err != nil {
 		slog.Error("recover orphans failed", "error", err)
 		os.Exit(1)
 	}
-
-	runsHandler := &api.RunsHandler{Store: st, Engine: eng}
+	for _,id := range orphansIDs{
+		runner.Start(id)
+	}
+	runsHandler := &api.RunsHandler{Store: st, Runner: runner}
 	r.Mount("/api/runs", runsHandler.Routes())
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -114,6 +118,7 @@ func main() {
 		slog.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
 	}
+	runner.Shutdown(ctx) // 复用同一个 10 秒的关闭 ctx
 	st.Close()
 	slog.Info("database pool closed")
 	slog.Info("server stopped cleanly")

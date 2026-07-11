@@ -16,3 +16,5 @@ WHERE id = $1;
 
 -- name: ListRunsByStatus :many
 SELECT * FROM runs WHERE status = $1 ORDER BY created_at ASC;
+-- name: GetRunStatus :one
+SELECT status FROM runs WHERE id = $1;

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -20,7 +19,7 @@ import (
 
 type RunsHandler struct {
 	Store *store.Store
-	Engine *engine.Engine
+	Runner *engine.Runner
 }
 
 // Routes 返回本模块的子路由,挂载点由 main 决定。
@@ -30,6 +29,7 @@ func (h *RunsHandler) Routes() chi.Router {
 	r.Get("/", h.list)
 	r.Get("/{id}", h.get)
 	r.Get("/{id}/events", h.listEvents)
+	r.Post("/{id}/cancel", h.cancel)
 	return r
 }
 func (h *RunsHandler) listEvents(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +77,10 @@ func (h *RunsHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	// 后台执行。用 context.Background():run 的生命周期远长于这次 HTTP 请求,
 	// 绝不能挂在 r.Context() 上——请求一结束它就被取消了。
-	go h.Engine.Execute(context.Background(), run.ID)
+	if !h.Runner.Start(run.ID) {
+		writeError(w, http.StatusServiceUnavailable, "server is shutting down")
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, run)
 }
@@ -119,4 +122,20 @@ func newID(prefix string) string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return fmt.Sprintf("%s_%s", prefix, hex.EncodeToString(b))
+}
+
+func (h *RunsHandler) cancel(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	// 先写意图,再拉绳——顺序不能反,否则引擎醒来时查不到 cancelling
+	if err := h.Store.Queries.UpdateRunStatus(r.Context(), sqlcgen.UpdateRunStatusParams{
+		ID: id, Status: "cancelling",
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if !h.Runner.Cancel(id) {
+		writeError(w, http.StatusConflict, "run is not active")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancelling"})
 }

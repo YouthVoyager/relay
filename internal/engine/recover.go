@@ -7,20 +7,20 @@ import (
 
 // RecoverOrphans 找出上次进程死亡时被遗弃的 run,重新执行。
 // 在服务启动时调用一次。
-func (e *Engine) RecoverOrphans(ctx context.Context) error {
+func (e *Engine) ListOrphans(ctx context.Context)([]string,error) {
 	orphans, err := e.Store.Queries.ListRunsByStatus(ctx, "running")
 	if err != nil {
-		return err
+		return []string{},err
 	}
 	if len(orphans) == 0 {
 		slog.Info("no orphan runs to recover")
-		return nil
+		return []string{},nil
 	}
-
+	runIDs := []string{}
 	slog.Info("recovering orphan runs", "count", len(orphans))
 	for _, run := range orphans {
 		slog.Info("resuming run", "run_id", run.ID)
-		go e.Execute(context.Background(), run.ID)
+		runIDs = append(runIDs, run.ID)
 	}
-	return nil
+	return runIDs,nil
 }
