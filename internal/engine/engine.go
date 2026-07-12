@@ -28,10 +28,14 @@ const systemPrompt = `你是 Relay,一个严谨的任务执行助手。
 
 type Engine struct {
 	Store    *store.Store
-	LLM      *llm.Client
+	LLM      LLMClient
 	Registry *tools.Registry
 	CompactionThreshold int
 	Bus *Bus
+	afterAppend func(typ string, seq int32) error
+}
+type LLMClient interface {
+	Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error)
 }
 
 // Execute 执行一个 run 直到终态。设计为在独立 goroutine 中调用。
@@ -87,10 +91,20 @@ func (e *Engine) run(ctx context.Context, log *slog.Logger, runID string) error 
 		}
 	}
 
-	// 崩溃恢复:先清算"孤悬的 tool_started"——上次进程死在副作用执行
-	// 中途,命令是否已生效未知。不盲目重放,转人工确认。
+	// 清算阶段:恢复(以及每次进入)时先把上一拍欠的账还清,再开新拍。
+	// ① 孤悬的 tool_started:死在副作用执行中途,状态未知 → 转人工确认
 	if err := e.resolveOrphanedStarts(ctx, log, runID, &seq); err != nil {
 		return err
+	}
+	// ② 从未分派的 tool_calls:直接重放,不重新调 LLM——重新调会让模型
+	// 重发同一调用产生新 ID(旧审批对不上号),严格校验的服务商还会
+	// 拒绝末尾挂着未应答 tool_calls 的对话
+	done, err := e.settlePendingToolCalls(ctx, log, runID, &seq)
+	if err != nil {
+		return err
+	}
+	if done {
+		return nil // 上一拍模型已宣布完成,只是没来得及记终态
 	}
 
 
@@ -167,52 +181,7 @@ func (e *Engine) run(ctx context.Context, log *slog.Logger, runID string) error 
 			} else {
 				lastToolSig, repeatCount = sig, 0
 			}
-			tool, ok := e.Registry.Get(tc.Function.Name)
-
-			// 危险工具:走审批流程
-			if ok {
-				if d, isDangerous := tool.(tools.Dangerous); isDangerous {
-					decided, approved := decisions[tc.ID]
-					switch {
-					case !decided && !pending[tc.ID]:
-						// 从未请求过:发起审批,挂起整个 run
-						if err := e.append(ctx, runID, &seq, EventApprovalRequested, ApprovalRequestedPayload{
-							ToolCallID: tc.ID, ToolName: tc.Function.Name,
-							Arguments: tc.Function.Arguments,
-							Reason:    d.ApprovalReason(tc.Function.Arguments),
-						}); err != nil {
-							return err
-						}
-						return errSuspendForApproval // 特殊信号,见下
-					case !decided:
-						// 请求过但还没决定(恢复重放时走到这):继续等
-						return errSuspendForApproval
-					case !approved:
-						// 被拒绝:告诉模型,让它换路走——拒绝是信息,不是终点
-						if err := e.append(ctx, runID, &seq, EventToolExecuted, ToolExecutedPayload{
-							ToolCallID: tc.ID, Name: tc.Function.Name,
-							Result: "此操作已被用户拒绝执行。请换一种不需要该操作的方式完成任务,或说明无法完成的原因。",
-						}); err != nil {
-							return err
-						}
-						continue
-					}
-					// approved == true:放行,落到下面正常执行
-
-					// 执行前先落"意图指纹"。若在执行与写 tool_executed 之间
-					// 崩溃,恢复时据此可知命令状态未知,转人工而非盲目重放。
-					if err := e.append(ctx, runID, &seq, EventToolStarted, ToolStartedPayload{
-						ToolCallID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
-					}); err != nil {
-						return err
-					}
-				}
-			}
-
-			result := e.executeTool(ctx, log, tc)
-			if err := e.append(ctx, runID, &seq, EventToolExecuted, ToolExecutedPayload{
-				ToolCallID: tc.ID, Name: tc.Function.Name, Result: result,
-			}); err != nil {
+			if err := e.dispatchToolCall(ctx, log, runID, &seq, tc, decisions, pending); err != nil {
 				return err
 			}
 		}
@@ -221,6 +190,114 @@ func (e *Engine) run(ctx context.Context, log *slog.Logger, runID string) error 
 	return fmt.Errorf("reached max steps (%d) without finishing", maxSteps)
 }
 var errSuspendForApproval = errors.New("suspend: waiting for approval")
+
+// dispatchToolCall 分派单个工具调用,主循环和恢复重放共用同一条路:
+// 危险工具先走审批(可能返回 errSuspendForApproval 挂起),批准后先落
+// 意图指纹再执行,最后写 tool_executed。被拒绝的调用也会写 tool_executed
+// ——拒绝是信息,不是终点。
+func (e *Engine) dispatchToolCall(ctx context.Context, log *slog.Logger, runID string, seq *int32,
+	tc llm.ToolCall, decisions, pending map[string]bool) error {
+
+	tool, ok := e.Registry.Get(tc.Function.Name)
+	if ok {
+		if d, isDangerous := tool.(tools.Dangerous); isDangerous {
+			decided, approved := decisions[tc.ID]
+			switch {
+			case !decided && !pending[tc.ID]:
+				// 从未请求过:发起审批,挂起整个 run
+				if err := e.append(ctx, runID, seq, EventApprovalRequested, ApprovalRequestedPayload{
+					ToolCallID: tc.ID, ToolName: tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+					Reason:    d.ApprovalReason(tc.Function.Arguments),
+				}); err != nil {
+					return err
+				}
+				return errSuspendForApproval
+			case !decided:
+				// 请求过但还没决定(恢复重放时走到这):继续等
+				return errSuspendForApproval
+			case !approved:
+				// 被拒绝:告诉模型,让它换路走
+				return e.append(ctx, runID, seq, EventToolExecuted, ToolExecutedPayload{
+					ToolCallID: tc.ID, Name: tc.Function.Name,
+					Result: "此操作已被用户拒绝执行。请换一种不需要该操作的方式完成任务,或说明无法完成的原因。",
+				})
+			}
+			// approved == true:执行前先落"意图指纹"。若在执行与写
+			// tool_executed 之间崩溃,恢复时据此可知命令状态未知,
+			// 转人工而非盲目重放。
+			if err := e.append(ctx, runID, seq, EventToolStarted, ToolStartedPayload{
+				ToolCallID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+
+	result := e.executeTool(ctx, log, tc)
+	return e.append(ctx, runID, seq, EventToolExecuted, ToolExecutedPayload{
+		ToolCallID: tc.ID, Name: tc.Function.Name, Result: result,
+	})
+}
+
+// settlePendingToolCalls 清算上一拍:进程可能死在"llm_called 已落库、
+// 分派未完成"之间(审批挂起后恢复也是这个形状)。把最后一拍里还没有
+// tool_executed 的调用直接重放——孤悬的 tool_started 已在此之前被
+// resolveOrphanedStarts 清算掉,走到这里的都是从未执行过的,重放安全。
+// 返回 done=true 表示上一拍模型已宣布完成,不需要再进主循环。
+func (e *Engine) settlePendingToolCalls(ctx context.Context, log *slog.Logger, runID string, seq *int32) (bool, error) {
+	events, err := e.Store.Queries.ListEventsByRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	var last *LLMCalledPayload
+	executed := map[string]bool{}
+	for _, ev := range events {
+		switch ev.Type {
+		case EventLLMCalled:
+			var p LLMCalledPayload
+			if json.Unmarshal(ev.Payload, &p) == nil {
+				last = &p
+			}
+		case EventToolExecuted:
+			var p ToolExecutedPayload
+			if json.Unmarshal(ev.Payload, &p) == nil {
+				executed[p.ToolCallID] = true
+			}
+		}
+	}
+	if last == nil {
+		return false, nil // 全新的 run,无账可清
+	}
+	if last.FinishReason != "tool_calls" || len(last.ToolCalls) == 0 {
+		return true, nil
+	}
+
+	var replay []ToolCallInfo
+	for _, tc := range last.ToolCalls {
+		if !executed[tc.ID] {
+			replay = append(replay, tc)
+		}
+	}
+	if len(replay) == 0 {
+		return false, nil
+	}
+
+	decisions, pending, err := e.loadApprovalState(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	log.Info("replaying undispatched tool calls from last beat", "count", len(replay))
+	for _, tc := range replay {
+		if err := e.dispatchToolCall(ctx, log, runID, seq, llm.ToolCall{
+			ID: tc.ID, Type: "function",
+			Function: llm.FunctionCall{Name: tc.Name, Arguments: tc.Arguments},
+		}, decisions, pending); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
+}
 
 // loadApprovalState 从事件流重建审批状态:
 // decisions[toolCallID] = 是否批准;pending 里的是已请求未决定的。
@@ -456,9 +533,14 @@ func (e *Engine) append(ctx context.Context, runID string, seq *int32, typ strin
 		}
 		return fmt.Errorf("append event seq=%d: %w", *seq, err)
 	}
-		if e.Bus != nil {
-			e.Bus.Publish(ev)
+	if e.Bus != nil {
+		e.Bus.Publish(ev)
+	}
+	if e.afterAppend != nil {
+		if hookErr := e.afterAppend(typ, *seq); hookErr != nil {
+			return hookErr
 		}
+	}
 	return nil
 }
 

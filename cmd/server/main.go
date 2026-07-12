@@ -56,6 +56,7 @@ func main() {
 	reg := tools.NewRegistry()
 	reg.Register(&tools.ListDir{Workspace: absWS})
 	reg.Register(&tools.ReadFile{Workspace: absWS})
+	reg.Register(&tools.RunShell{Workspace: absWS, Timeout: 30 * time.Second})
 	bus := engine.NewBus()
 	eng := &engine.Engine{
 		Store:    st,
@@ -78,7 +79,21 @@ func main() {
 		Bus: bus,
 	}
 	runsHandler := &api.RunsHandler{Store: st, Runner: runner,StreamHandler: streamHeader}
-	r.Mount("/api/runs", runsHandler.Routes())
+	r.Route("/api", func(r chi.Router) {
+		r.Use(api.RequireToken(cfg.APIToken))
+		r.Mount("/runs", runsHandler.Routes())
+	})
+	// 静态托管前端构建产物;所有非 /api 路径回退到 index.html(SPA 惯例)
+	webDist := getEnvDefault("RELAY_WEB_DIST", "./web/dist")
+	fileServer := http.FileServer(http.Dir(webDist))
+	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		path := filepath.Join(webDist, filepath.Clean(r.URL.Path))
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		http.ServeFile(w, r, filepath.Join(webDist, "index.html"))
+	})
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -127,4 +142,11 @@ func main() {
 	st.Close()
 	slog.Info("database pool closed")
 	slog.Info("server stopped cleanly")
+}
+
+func getEnvDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

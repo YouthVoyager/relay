@@ -63,19 +63,27 @@ func (h *RunsHandler) decide(w http.ResponseWriter, r *http.Request) {
 	payload, _ := json.Marshal(engine.ApprovalDecidedPayload{
 		ToolCallID: req.ToolCallID, Approved: req.Approved,
 	})
-	ev, err := h.Store.Queries.AppendEvent(r.Context(), sqlcgen.AppendEventParams{
-		RunID: id, Seq: seq + 1, Type: engine.EventApprovalDecided, Payload: payload,
+
+
+	err = h.Store.WithTx(r.Context(), func(q *sqlcgen.Queries) error {
+		if _, err := q.AppendEvent(r.Context(), sqlcgen.AppendEventParams{
+			RunID: id, Seq: seq + 1, Type: engine.EventApprovalDecided, Payload: payload,
+		}); err != nil {
+			return err
+		}
+		return q.UpdateRunStatus(r.Context(), sqlcgen.UpdateRunStatusParams{
+			ID: id, Status: "running",
+		})
 	})
 	if err != nil {
+		slog.Error("approval decide failed", "error", err,
+			"request_id", middleware.GetReqID(r.Context()))
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	// 推给已连接的 SSE 订阅者,否则前端的审批卡片要等重连才会消失
-	h.StreamHandler.Bus.Publish(ev)
+	// 	// 推给已连接的 SSE 订阅者,否则前端的审批卡片要等重连才会消失
+	// h.StreamHandler.Bus.Publish(ev)
 
-	_ = h.Store.Queries.UpdateRunStatus(r.Context(), sqlcgen.UpdateRunStatusParams{
-		ID: id, Status: "running",
-	})
 	if !h.Runner.Start(id) {
 		writeError(w, http.StatusServiceUnavailable, "server is shutting down")
 		return

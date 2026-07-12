@@ -14,6 +14,37 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+  migrate:
+    image: ghcr.io/pressly/goose:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: postgres://relay:relay@postgres:5432/relay?sslmode=disable
+    command: ["-dir", "/migrations", "up"]
+
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://relay:relay@postgres:5432/relay?sslmode=disable
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      RELAY_API_TOKEN: ${RELAY_API_TOKEN:-}
+    volumes:
+      - workspace:/app/workspace
+    stop_grace_period: 15s
 
 volumes:
   pgdata:
+  workspace:

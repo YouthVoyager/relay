@@ -1,4 +1,11 @@
 DB_URL ?= postgres://relay:relay@localhost:5432/relay?sslmode=disable
+TEST_DB_URL ?= postgres://relay:relay@localhost:5432/relay_test?sslmode=disable
+
+test: ## 单元测试(无需 DB)
+	go test ./... -count=1
+
+test-all: ## 全部测试(含集成)
+	TEST_DATABASE_URL="$(TEST_DB_URL)" go test ./... -count=1 -v
 
 .PHONY: run migrate-up migrate-down migrate-status sqlc build test
 
@@ -19,3 +26,6 @@ migrate-status: ## 查看迁移状态
 
 sqlc: ## 重新生成查询代码
 	sqlc generate
+
+lint: ## 静态检查
+	golangci-lint run ./...

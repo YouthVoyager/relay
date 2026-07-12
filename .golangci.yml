@@ -1,0 +1,10 @@
+linters:
+  enable:
+    - errcheck      # 未检查的 error 返回值
+    - govet         # 官方静态分析(含 writestring 等)
+    - staticcheck   # 最强的第三方检查集
+    - unused
+    - ineffassign   # 无效赋值
+    - bodyclose     # HTTP body 忘关
+    - sqlclosecheck # sql rows 忘关
+    - noctx         # 无 context 的网络调用

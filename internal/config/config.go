@@ -17,6 +17,7 @@ type Config struct {
 	LLMAPIKey  string
 	LLMModel   string
 	CompactionThreshold int
+	APIToken string
 }
 
 // Load 从环境变量读取配置。必填项缺失时返回错误(fail fast)。
@@ -29,6 +30,7 @@ func Load() (Config, error) {
 		LLMAPIKey:  os.Getenv("LLM_API_KEY"),
 		LLMModel:   getEnv("LLM_MODEL", ""),
 		CompactionThreshold: getEnvInt("RELAY_COMPACTION_THRESHOLD", 20_000),
+		APIToken: getEnv("API_TOKEN",""),
 	}
 
 	// 校验:现在先不强制要求 API key(阶段 3 才用到),

@@ -1,7 +1,18 @@
+import { authHeaders, notifyUnauthorized } from './auth'
+import type { Run } from './types'
+
 const jsonHeaders = { 'Content-Type': 'application/json' }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init)
+  const res = await fetch(url, {
+    ...init,
+    headers: { ...authHeaders(), ...init?.headers },
+  })
+  if (res.status === 401) {
+    // 广播给 TokenGate 弹令牌输入;仍然抛错让调用方(React Query)进入 error 态
+    notifyUnauthorized()
+    throw new Error('未授权:需要有效的访问令牌')
+  }
   if (!res.ok) {
     // 后端统一错误结构 {"error": "..."},解析失败则退回状态码
     const body = await res.json().catch(() => null)
@@ -26,5 +37,3 @@ export const api = {
       body: JSON.stringify({ tool_call_id: toolCallId, approved }),
     }),
 }
-
-import type { Run } from './types'

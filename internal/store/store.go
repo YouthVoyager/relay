@@ -69,6 +69,21 @@ func New(ctx context.Context, databaseURL string) (*Store, error) {
 	}, nil
 }
 
+// WithTx 在事务中执行 fn:fn 返回 nil 则提交,否则回滚。
+// fn 拿到的 Queries 绑定在事务上——同一套查询,事务执行环境(DBTX 的兑现)。
+func (s *Store) WithTx(ctx context.Context, fn func(q *sqlcgen.Queries) error) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // 提交后 Rollback 是无害的 no-op;panic/早退时它是保险丝
+
+	if err := fn(sqlcgen.New(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) Close() {
 	s.Pool.Close()
 }
